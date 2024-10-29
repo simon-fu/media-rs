@@ -1,0 +1,62 @@
+[package]
+name = "media-rs"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+
+
+anyhow = { workspace = true, optional = false }
+thiserror = { workspace = true, optional = false }
+
+tokio = { workspace = true, optional = false}
+tokio-util = { workspace = true, optional = false }
+tokio-stream = { workspace = true, optional = false }
+tokio-rustls = { workspace = true, optional = false }
+rustls = { workspace = true, optional = false }
+futures = { workspace = true, optional = false }
+
+bytes = { workspace = true, optional = false }
+
+parking_lot = { workspace = true, optional = false }
+
+tracing = { workspace = true, optional = false }
+tracing-subscriber = { workspace = true, optional = false }
+tracing-appender = { workspace = true, optional = false }
+time = { workspace = true, optional = false }
+
+axum = { workspace = true, optional = false }
+axum-server = { workspace = true, optional = false }
+hyper = { workspace = true, optional = false }
+# tower-service = { workspace = true, optional = false }
+serde = { workspace = true, optional = false }
+serde_json = { workspace = true, optional = false }
+
+redis = { workspace = true, optional = false }
+# tonic = { workspace = true, optional = false }
+# prost = { workspace = true, optional = false }
+
+uuid = { workspace = true, optional = false }
+pretty-hex = { workspace = true, optional = false }
+
+tokio-tungstenite = { workspace = true, optional = false }
+async-trait = { workspace = true, optional = false }
+
+ulid = { workspace = true, optional = false }
+clap = { workspace = true, optional = false }
+chrono = { workspace = true, optional = false }
+regex = { workspace = true, optional = false }
+webrtc = { workspace = true, optional = false }
+webrtc-util = { workspace = true, optional = false }
+bytesize = { workspace = true, optional = false }
+arc-swap = { workspace = true, optional = false }
+config = { workspace = true, optional = false }
+bevy_reflect = { workspace = true, optional = false }
+moka = { workspace = true, optional = false }
+quinn = { workspace = true, optional = false }
+rustls-pemfile = { workspace = true, optional = false }
+
+# pretty-hex = { workspace = true, optional = false }
+test-log = { workspace = true, optional = false }
+# tracing-test = { workspace = true, optional = false }
