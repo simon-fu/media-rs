@@ -45,12 +45,28 @@ impl ExtFormat {
             Self::OneByte => ExtIter(buf, parse_onebyte_uncheck),
             Self::TwoByte => ExtIter(buf, parse_twobyte_uncheck),
         }
-        
     }
+
+    pub fn build_fn(&self) -> WriteExtFn {
+        match self {
+            Self::OneByte => write_onebyte_ext,
+            Self::TwoByte => write_twobyte_ext,
+        }
+    }
+
+    // pub fn builder<'a>(&self, buf: &'a mut [u8]) -> ExtBuilder<'a> {
+    //     ExtBuilder {
+    //         func: self.build_fn(),
+    //         buf,
+    //         len: 0,
+    //     }
+    // }
 }
+
 
 type ParseIdFn = fn(buf: &[u8]) -> Result<Option<(&[u8], u8, usize)>, RtpError>;
 type ParseIdUncheckFn = fn(buf: &[u8]) -> Option<(&[u8], u8, usize)>;
+pub type WriteExtFn = fn(&mut [u8], u8, &[u8]) -> usize;
 
 fn check_ext(mut buf: &[u8], f: ParseIdFn) -> Result<(), RtpError> {
     while !buf.is_empty() {
@@ -96,6 +112,13 @@ fn parse_onebyte_uncheck(buf: &[u8]) -> Option<(&[u8], u8, usize)> {
     }
 }
 
+fn write_onebyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
+    let len = ext.len() as u8;
+    buf[0] = id << 4 | (len-1);
+    buf[1..1+ext.len()].copy_from_slice(ext);
+    1 + ext.len()
+}
+
 fn parse_twobyte (buf: &[u8]) -> Result<Option<(&[u8], u8, usize)>, RtpError> {
     if buf.len() < 2 {
         return Err(RtpError::NotEnoughBuffer {
@@ -112,6 +135,13 @@ fn parse_twobyte_uncheck(buf: &[u8]) -> Option<(&[u8], u8, usize)> {
     let id = buf[0];
     let len = buf[1] as usize;
     Some((&buf[2..], id, len))
+}
+
+fn write_twobyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
+    buf[0] = id;
+    buf[1] = ext.len() as u8;
+    buf[2..2+ext.len()].copy_from_slice(ext);
+    2 + ext.len()
 }
 
 pub struct ExtIter<'a>(&'a [u8], ParseIdUncheckFn);
