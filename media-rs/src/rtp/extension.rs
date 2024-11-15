@@ -47,10 +47,16 @@ impl ExtFormat {
         }
     }
 
-    pub fn build_fn(&self) -> WriteExtFn {
+    pub fn build_fn(&self) -> WriteExtFns {
         match self {
-            Self::OneByte => write_onebyte_ext,
-            Self::TwoByte => write_twobyte_ext,
+            Self::OneByte => WriteExtFns {
+                begin_fn: write_onebyte_begin,
+                end_fn: write_onebyte_end,
+            },
+            Self::TwoByte => WriteExtFns {
+                begin_fn: write_twobyte_begin,
+                end_fn: write_twobyte_end,
+            },
         }
     }
 
@@ -66,7 +72,12 @@ impl ExtFormat {
 
 type ParseIdFn = fn(buf: &[u8]) -> Result<Option<(&[u8], u8, usize)>, RtpError>;
 type ParseIdUncheckFn = fn(buf: &[u8]) -> Option<(&[u8], u8, usize)>;
-pub type WriteExtFn = fn(&mut [u8], u8, &[u8]) -> usize;
+// pub type WriteExtFn = fn(&mut [u8], u8, &[u8]) -> usize;
+
+pub struct WriteExtFns {
+    pub begin_fn: fn(&mut [u8], u8) -> usize, // return header length
+    pub end_fn:  fn(&mut [u8], usize) ,
+}
 
 fn check_ext(mut buf: &[u8], f: ParseIdFn) -> Result<(), RtpError> {
     while !buf.is_empty() {
@@ -112,12 +123,23 @@ fn parse_onebyte_uncheck(buf: &[u8]) -> Option<(&[u8], u8, usize)> {
     }
 }
 
-fn write_onebyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
-    let len = ext.len() as u8;
-    buf[0] = id << 4 | (len-1);
-    buf[1..1+ext.len()].copy_from_slice(ext);
-    1 + ext.len()
+fn write_onebyte_begin(buf: &mut [u8], id: u8) -> usize {
+    buf[0] = id << 4 | 0;
+    1
 }
+
+fn write_onebyte_end(buf: &mut [u8], body_len: usize) {
+    assert!(body_len > 0 && body_len < 17, "invalid RTP extension OneByte body length [{}]", body_len);
+    let len = body_len as u8;
+    buf[0] |= (len-1) & 0x0F;
+}
+
+// fn write_onebyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
+//     let len = ext.len() as u8;
+//     buf[0] = id << 4 | (len-1);
+//     buf[1..1+ext.len()].copy_from_slice(ext);
+//     1 + ext.len()
+// }
 
 fn parse_twobyte (buf: &[u8]) -> Result<Option<(&[u8], u8, usize)>, RtpError> {
     if buf.len() < 2 {
@@ -137,12 +159,23 @@ fn parse_twobyte_uncheck(buf: &[u8]) -> Option<(&[u8], u8, usize)> {
     Some((&buf[2..], id, len))
 }
 
-fn write_twobyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
+fn write_twobyte_begin(buf: &mut [u8], id: u8) -> usize {
     buf[0] = id;
-    buf[1] = ext.len() as u8;
-    buf[2..2+ext.len()].copy_from_slice(ext);
-    2 + ext.len()
+    buf[1] = 0;
+    2
 }
+
+fn write_twobyte_end(buf: &mut [u8], body_len: usize) {
+    assert!(body_len < 256, "invalid RTP extension TwoByte body length [{}]", body_len);
+    buf[1] = body_len as u8;
+}
+
+// fn write_twobyte_ext(buf: &mut [u8], id: u8, ext: &[u8]) -> usize {
+//     buf[0] = id;
+//     buf[1] = ext.len() as u8;
+//     buf[2..2+ext.len()].copy_from_slice(ext);
+//     2 + ext.len()
+// }
 
 pub struct ExtIter<'a>(&'a [u8], ParseIdUncheckFn);
 

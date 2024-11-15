@@ -7,6 +7,9 @@ pub use rtcp::*;
 mod seq;
 pub use seq::*;
 
+mod timestamp;
+pub use timestamp::*;
+
 pub mod extension;
 
 pub mod error;

@@ -7,6 +7,8 @@ pub enum RtpError {
         origin: &'static str,
     }, 
     
+    UnknownFirst(u8),
+
     UnknownVersion(u8),
 
     UnknownPayloadType(u8),

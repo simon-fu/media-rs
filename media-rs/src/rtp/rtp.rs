@@ -1,7 +1,7 @@
 use std::fmt::{self, Write};
 use bytes::BufMut;
 
-use super::{error::RtpError, extension::{ExtFormat, ExtIter, WriteExtFn}, Seq};
+use super::{error::RtpError, extension::{ExtFormat, ExtIter, WriteExtFns}, Seq, Timestamp};
 
 
 pub struct RefRtpHeader<'a> {
@@ -48,8 +48,8 @@ impl<'a> RefRtpHeader<'a> {
     }
 
     #[inline]
-    pub fn timestamp(&self) -> u32 {
-        u32::from_be_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]])
+    pub fn timestamp(&self) -> Timestamp {
+        Timestamp(u32::from_be_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]]))
         // (self.buf[4] as u32) << 24
         //     | (self.buf[5] as u32) << 16
         //     | (self.buf[6] as u32) << 8
@@ -84,12 +84,39 @@ impl<'a> TryFrom<&'a [u8]> for RefRtpHeader<'a> {
     type Error = RtpError;
 
     fn try_from(buf: &'a [u8]) -> Result<Self, Self::Error> {
+        /* 
+            From: https://tools.ietf.org/html/draft-ietf-avtcore-rfc5764-mux-fixes
+            is rtp/rtcp?
+                1) len >= 12
+                2) version = 2
+                3) buf[0] > 127 && buf[0] < 192
+
+                        +----------------+
+                        |        [0..3] -+--> forward to STUN
+                        |                |
+                        |      [16..19] -+--> forward to ZRTP
+                        |                |
+            packet -->  |      [20..63] -+--> forward to DTLS
+                        |                |
+                        |      [64..79] -+--> forward to TURN Channel
+                        |                |
+                        |    [128..191] -+--> forward to RTP/RTCP
+                        +----------------+
+        */
+
         if buf.len() < Self::MIN_LEN {
             return Err(RtpError::NotEnoughBuffer {
                 expect: Self::MIN_LEN,
                 actual: buf.len(),
                 origin: "Rtp header length",
             });
+        }
+
+        {
+            let first = buf[0];
+            if !(first > 127 && first < 192) {
+                return Err(RtpError::UnknownFirst(first));
+            }
         }
 
         let header = Self::new(buf);
@@ -104,6 +131,7 @@ impl<'a> TryFrom<&'a [u8]> for RefRtpHeader<'a> {
 
 
 
+#[derive(Clone, Copy)]
 pub struct RefRtpPacket<'a> {
     buf: &'a [u8],
 }
@@ -307,7 +335,7 @@ impl<'a> fmt::Display for RefRtpPacket<'a> {
             header.ssrc(),
             header.payload_type(), 
             header.seq().0, 
-            header.timestamp(),
+            header.timestamp().0,
         )?;
 
         {
@@ -364,7 +392,7 @@ impl<'a> RtpBuilder<'a> {
         mark_flag: bool,
         payload_type: u8,
         seq: Seq,
-        timestamp: u32,
+        timestamp: Timestamp,
         ssrc: u32,
         csrc_iter: CI,
     ) -> Self 
@@ -415,10 +443,18 @@ impl<'a> RtpBuilder<'a> {
         build_payload(self.buf, self.len, payload, padding)
     }
 
+    pub fn payload_builder(self) -> PayloadBuilder<'a> {
+        PayloadBuilder {
+            buf: self.buf,
+            total_len: self.len
+        }
+    }
+
 }
 
+
 pub struct ExtBuilder<'a> {
-    func: WriteExtFn,
+    func: WriteExtFns,
     // owner: &'a mut RtpBuilder<'a>,
     buf: &'a mut [u8],
     total_len: usize,
@@ -429,8 +465,30 @@ impl<'a> ExtBuilder<'a> {
 
     #[inline]
     pub fn write_ext(&mut self, id: u8, ext: &[u8]) {
-        let len = (self.func)(&mut self.buf[self.total_len..], id, ext);
-        self.total_len += len;
+        let buf = &mut self.buf[self.total_len..];
+
+        let header_len = (self.func.begin_fn)(buf, id);
+        (&mut buf[header_len..header_len+ext.len()]).copy_from_slice(ext);
+        (self.func.end_fn)(buf, ext.len());
+
+        self.total_len += header_len + ext.len();
+
+        // let len = (self.func)(&mut self.buf[self.total_len..], id, ext);
+        // self.total_len += len;
+    }
+
+    #[inline]
+    pub fn ext<'b>(&'b mut self, id: u8) -> ExtItemBuilder<'b, 'a> {
+        let offset = self.total_len;
+
+        let header_len = (self.func.begin_fn)(&mut self.buf[offset..], id);
+
+        ExtItemBuilder {
+            parent: self,
+            offset,
+            header_len,
+            item_body_len: 0,
+        }
     }
 
     // #[inline]
@@ -456,6 +514,17 @@ impl<'a> ExtBuilder<'a> {
         let len = self.total_len - self.offset  - 4;
         let words = (len + 3) / 4;
 
+        // // no extensions
+        // if words == 0 {
+            
+        //     self.total_len -= 4;
+            
+        //     // buf[0]: version(2), padding(1), extension(1), cc(4) 
+        //     self.buf[0] &= 0b11_1_0_1111 ; 
+
+        //     return;
+        // }
+
         let padding_len = (words * 4) - len;
         if padding_len > 0 {
             let mut buf = &mut self.buf[self.total_len..];
@@ -467,6 +536,50 @@ impl<'a> ExtBuilder<'a> {
         buf.put_u16(words as u16);
     }
 }
+
+pub struct ExtItemBuilder<'a, 'b> {
+    parent: &'a mut ExtBuilder<'b>,
+    offset: usize,
+    header_len: usize,
+    item_body_len: usize,
+}
+
+impl<'a, 'b> Drop for ExtItemBuilder<'a, 'b> {
+    fn drop(&mut self) {
+        let item_body_len  = self.item_body_len;
+        (self.parent.func.end_fn)(self.header_buf(), item_body_len);
+
+        self.parent.total_len += self.header_len + self.item_body_len;
+    }
+}
+
+impl<'a, 'b> ExtItemBuilder<'a, 'b> {
+    pub fn write_u16(&mut self, value: u16) -> &mut Self {
+        self.tail_buf().put_u16(value);
+        self.item_body_len += 2;
+        self
+    }
+
+    pub fn write_slice(&mut self, value: &[u8]) {
+        self.tail_buf().put(value);
+        self.item_body_len += value.len();
+    }
+
+    fn header_buf(&mut self) -> &mut [u8] {
+        let offset = self.offset;
+        &mut self.parent.buf[offset..]
+    }
+
+    fn tail_buf(&mut self) -> &mut [u8] {
+        let tail = self.tail();
+        &mut self.parent.buf[tail..]
+    }
+
+    fn tail(&self) -> usize {
+        self.offset + self.header_len + self.item_body_len
+    }
+}
+
 
 pub struct PayloadBuilder<'a> {
     // owner: &'a mut RtpBuilder<'a>,
@@ -511,7 +624,7 @@ pub fn build_header<CI>(
     mark_flag: bool,
     payload_type: u8,
     seq: Seq,
-    timestamp: u32,
+    timestamp: Timestamp,
     ssrc: u32,
     csrc_iter: CI,
 ) -> usize
@@ -550,7 +663,7 @@ where
 
         // buf[4-7]: timestamp
         {
-            let bytes = timestamp.to_be_bytes();
+            let bytes = timestamp.0.to_be_bytes();
             buf[4] = bytes[0];
             buf[5] = bytes[1];
             buf[6] = bytes[2];
@@ -574,9 +687,9 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::rtp::{extension::ExtFormat, Seq};
+    use crate::rtp::{extension::ExtFormat, Seq, Timestamp};
 
-    use super::{RefRtpPacket, RtpBuilder};
+    use super::{RefRtpPacket, RtpBuilder, PayloadBuilder};
 
     #[derive(Debug, Clone)]
     struct Case {
@@ -584,7 +697,7 @@ mod test {
         mark_flag: bool,
         payload_type: u8,
         seq: Seq,
-        timestamp: u32,
+        timestamp: Timestamp,
         ssrc: u32,
         csrc: Vec<u32>,
         ext_fmt: Option<ExtFormat>,
@@ -599,7 +712,7 @@ mod test {
                 mark_flag: true,
                 payload_type: 111,
                 seq: Seq::from(22),
-                timestamp: 3333,
+                timestamp: 3333.into(),
                 ssrc: 4444,
                 csrc: vec![5555], 
                 ext_fmt: Some(ExtFormat::OneByte),
@@ -613,7 +726,46 @@ mod test {
 
     impl Case {
         fn build_and_check(&self, buf: &mut [u8]) {
-            let builder = RtpBuilder ::from_basic(
+            // let builder = RtpBuilder ::from_basic(
+            //     buf, 
+            //     self.mark_flag, 
+            //     self.payload_type, 
+            //     self.seq, 
+            //     self.timestamp, 
+            //     self.ssrc, 
+            //     self.csrc.iter().map(|x|*x),
+            // );
+
+            // let packet_len = match self.ext_fmt {
+            //     Some(ext_fmt) => {
+            //         let mut builder = builder.extension(ext_fmt);
+            //         for ext in self.exts.iter() {
+            //             builder.write_ext(ext.0, &ext.1);
+            //         }
+            //         builder.payload(&self.payload[..], self.padding)
+            //     },
+            //     None => builder.payload(&self.payload[..], self.padding),
+            // };
+    
+            // self.check(&buf[..packet_len]);
+
+            self.build_with_and_check(buf, true);
+            self.build_with_and_check(buf, false);
+
+        }
+
+        fn build_with_and_check(&self, buf: &mut [u8], whole_ext: bool) {
+            let builder = self.rtp_builder(buf);
+
+            let packet_len = self
+            .build_rtp_extensions(builder, whole_ext)
+            .payload(&self.payload[..], self.padding);
+
+            self.check(&buf[..packet_len]);
+        }
+
+        fn rtp_builder<'a>(&self, buf: &'a mut [u8]) -> RtpBuilder<'a> {
+            RtpBuilder ::from_basic(
                 buf, 
                 self.mark_flag, 
                 self.payload_type, 
@@ -621,22 +773,31 @@ mod test {
                 self.timestamp, 
                 self.ssrc, 
                 self.csrc.iter().map(|x|*x),
-            );
+            )
+        }
 
-            let packet_len = match self.ext_fmt {
+        fn build_rtp_extensions<'a>(&self, builder: RtpBuilder<'a>, whole: bool)  -> PayloadBuilder<'a>{
+
+            match self.ext_fmt {
                 Some(ext_fmt) => {
                     let mut builder = builder.extension(ext_fmt);
-                    for ext in self.exts.iter() {
-                        builder.write_ext(ext.0, &ext.1);
-                    }
-                    builder.payload(&self.payload[..], self.padding)
-                },
-                None => builder.payload(&self.payload[..], self.padding),
-            };
-    
-            self.check(&buf[..packet_len]);
+                    if whole {
+                        for ext in self.exts.iter() {
+                            builder.write_ext(ext.0, &ext.1);
+                        }
+                    } else {
 
+                        for ext in self.exts.iter() {
+                            builder.ext(ext.0).write_slice(&ext.1);
+                        }
+                    }
+                    
+                    builder.payload_builder()
+                },
+                None => builder.payload_builder(),
+            }
         }
+
 
         fn check(&self, buf: &[u8]) {
             let rtp = RefRtpPacket::parse(buf).unwrap();
@@ -668,6 +829,8 @@ mod test {
                 assert!(rtp.extension_iter().unwrap().eq(
                     self.exts.iter().map(|x|(x.0, x.1.as_slice()))    
                 ));
+            } else {
+                assert!(rtp.extension_iter().is_none());
             }
             
             assert_eq!(rtp.payload(), &self.payload[..]);
@@ -678,13 +841,23 @@ mod test {
     fn test_build_rtp() {
         let mut buf = vec![0_u8; 1700];
 
-        // extension
+        // has extension
         {
             let mut caze = Case::default();
             caze.build_and_check(&mut buf);
     
+            // extension onebyte format
+            caze.ext_fmt = Some(ExtFormat::OneByte);
+            caze.build_and_check(&mut buf);
+
             // extension twobyte format
             caze.ext_fmt = Some(ExtFormat::TwoByte);
+            caze.build_and_check(&mut buf);
+
+
+            // empty extension 
+            caze.ext_fmt = Some(ExtFormat::OneByte);
+            caze.exts = vec![];
             caze.build_and_check(&mut buf);
     
             // no extension 

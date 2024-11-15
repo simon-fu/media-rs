@@ -60,3 +60,4 @@ rustls-pemfile = { workspace = true, optional = false }
 # pretty-hex = { workspace = true, optional = false }
 test-log = { workspace = true, optional = false }
 # tracing-test = { workspace = true, optional = false }
+paste = { workspace = true, optional = false }
