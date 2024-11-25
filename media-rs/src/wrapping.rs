@@ -2,7 +2,7 @@
 #[macro_export]
 macro_rules! define_wrapping_type {
     ($name:ident, $unsigned_type:ident, $signed_type:ident) => {
-        #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+        #[derive(PartialEq, Eq, Debug, Clone, Copy, Default)]
         pub struct $name(pub $unsigned_type);
         impl $name {
             const SIGNED_ZERO: $signed_type = 0;

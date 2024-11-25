@@ -10,7 +10,7 @@ impl Default for AudioLevelValue {
     fn default() -> Self {
         Self { 
             voice: false, 
-            volume: AudioLevelVolume(127),
+            volume: AudioLevelVolume::MIN,
         }
     }
 }
@@ -45,11 +45,22 @@ impl AudioLevelValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord)]
 pub struct AudioLevelVolume(pub u8);
 
 impl AudioLevelVolume {
+    pub const MAX: Self = Self(0);
+    pub const MIN: Self = Self(127);
     pub const INF_MIN: Self = Self(128);
+    const MASK: u8 = 0x7F;
+
+    pub fn from_i64(val: i64) -> Self {
+        Self((val as u8) & Self::MASK)
+    }
+
+    pub fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
 }
 
 impl PartialOrd for AudioLevelVolume {
@@ -58,6 +69,33 @@ impl PartialOrd for AudioLevelVolume {
     }
 }
 
+impl std::ops::Add<u8> for AudioLevelVolume {
+    type Output = AudioLevelVolume;
+
+    fn add(self, rhs: u8) -> Self::Output {
+        if self.0 >= rhs {
+            Self(self.0 - rhs)
+        } else {
+            Self::MAX
+        }
+    }
+}
+
+impl std::ops::Sub<u8> for AudioLevelVolume {
+    type Output = AudioLevelVolume;
+
+    fn sub(self, rhs: u8) -> Self::Output {
+        let v = self.0.saturating_add(rhs);
+        if v <= Self::MIN.0 {
+            Self(v)
+        } else {
+            Self::MIN
+        }
+    }
+}
+
+
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -65,7 +103,7 @@ mod test {
     #[test]
     fn test() {
         assert!(AudioLevelVolume(0) == AudioLevelVolume(0));
-        assert!(AudioLevelVolume(0) > AudioLevelVolume(127));
-        assert!(AudioLevelVolume(127) > AudioLevelVolume::INF_MIN);
+        assert!(AudioLevelVolume(0) > AudioLevelVolume::MIN);
+        assert!(AudioLevelVolume::MIN > AudioLevelVolume::INF_MIN);
     }
 }

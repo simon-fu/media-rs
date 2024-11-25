@@ -560,6 +560,12 @@ impl<'a, 'b> ExtItemBuilder<'a, 'b> {
         self
     }
 
+    pub fn write_u32(&mut self, value: u32) -> &mut Self {
+        self.tail_buf().put_u32(value);
+        self.item_body_len += 4;
+        self
+    }
+
     pub fn write_slice(&mut self, value: &[u8]) {
         self.tail_buf().put(value);
         self.item_body_len += value.len();
